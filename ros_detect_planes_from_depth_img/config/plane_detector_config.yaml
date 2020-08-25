@@ -39,7 +39,7 @@ img_resize_ratio: 0.2 # Choose from [1.0, 0.5, 0.25, 0.2, 0.1].
 
 # In depth_img, truncate pixel value to zero
 # if it's larger than this. (Unit: meter.)
-depth_trunc: 4
+depth_trunc: 12
 
 # After creating point cloud, downsample the point cloud.
 # Unit: meter.
@@ -56,9 +56,9 @@ RANSAC_config:
   #   then there are totally 12288 points.
   #   If the plane shape relative to the image is (0.2, 0.2)
   #   then it has approximately 400 points.
-  min_points: 800
+  min_points: 900  #for non downsampled image
 
-  iterations: 30 # Number of iterations in the RANSAC algorithm.
+  iterations: 50 # Number of iterations in the RANSAC algorithm.
   # More iterations cost more time, but may give better result.
 
   # A point is considered as part of the plane

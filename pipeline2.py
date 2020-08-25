@@ -15,6 +15,7 @@ import argparse
 import numpy as np
 import cv2
 import scipy.ndimage as nd
+# from skimage.color import rgb2hsv
 
 import pyrealsense2 as rs
 from read_bag import depth_filter, camera_intrinsics
@@ -115,7 +116,7 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
     colorizer = rs.colorizer()
     idx = 0
     # initial frame delay
-    idx_limit = 90
+    idx_limit = 30
 
     pre_seg_mask_sum = None  # previous frame path segmentation area
 
@@ -151,20 +152,22 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
         # print("executed in %.3fs" % (time.time()-t))
         # val, cnts = np.unique(pred, return_counts=True)
 
-        seg_mask = (pred==11)#.astype(np.uint8)  # pavement (value==1) is what we need
+        # pavement, floor, road, earth/ground, field, path, dirt/track
+        seg_mask = (pred==11) | (pred==3) | (pred==6) | (pred==13) | (pred==29) | (pred==52) | (pred==91)#.astype(np.uint8)  
+        
         if idx == idx_limit: # 1st frame detection needs to be robust
             pre_seg_mask_sum = np.sum(seg_mask)
         # checking for bad detection
         new_seg_sum = np.sum(seg_mask)
         diff = abs(new_seg_sum-pre_seg_mask_sum)
-        if diff > pre_seg_mask_sum/15:
-            seg_mask = np.ones_like(pred).astype(np.uint8)
-            del new_seg_sum
-        else:
-            pre_seg_mask_sum = new_seg_sum
-            ### mask Hole filling
-            seg_mask = nd.binary_fill_holes(seg_mask).astype(int)
-            seg_mask = seg_mask.astype(np.uint8)
+        # if diff > pre_seg_mask_sum/15:  # smoothening between segmentation outputs - seems like a bad idea since the model inputs are not connected between timesteps
+        #     seg_mask = np.ones_like(pred).astype(np.uint8) # need to add depth (5mt) criterea for calculation for robustness
+        #     del new_seg_sum
+        # else:
+        pre_seg_mask_sum = new_seg_sum
+        ### mask Hole filling
+        seg_mask = nd.binary_fill_holes(seg_mask).astype(int)
+        seg_mask = seg_mask.astype(np.uint8)
             #####
         seg_mask_3d = np.dstack((seg_mask, seg_mask, seg_mask))
 
@@ -179,14 +182,55 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
         depth_color_image = np.asanyarray(depth_color_frame.get_data())
 
         ############ Plane Detection
+        ## need to add smoothening between frames - by plane weights' variance?
         try:
-            planes_mask, planes_normal, list_plane_params = test_PlaneDetector_send(img_color=color_image*seg_mask_3d, img_depth=depth_array*seg_mask)
-            # print("normal plane mask ", planes_mask.dtype)
+            ### need to add multithreading here (and maybe other methods?)
+            planes_mask, planes_normal, list_plane_params = test_PlaneDetector_send(\
+                img_color=color_image*seg_mask_3d, img_depth=depth_array*seg_mask)
+            planes_mask2, _, _ = test_PlaneDetector_send(\
+                img_color=color_image*seg_mask_3d, img_depth=depth_array*seg_mask)
+            planes_mask3, _, _ = test_PlaneDetector_send(\
+                img_color=color_image*seg_mask_3d, img_depth=depth_array*seg_mask)
+            planes_mask4, _, _ = test_PlaneDetector_send(\
+                img_color=color_image*seg_mask_3d, img_depth=depth_array*seg_mask)
+            planes_mask5, _, _ = test_PlaneDetector_send(\
+                img_color=color_image*seg_mask_3d, img_depth=depth_array*seg_mask)
+            # planes_mask = planes_mask | planes_mask2 | planes_mask3 | planes_mask4  ## planes_mask is uint8
+            planes_mask = planes_mask + planes_mask2 + planes_mask3 + planes_mask4 + planes_mask5 ## planes_mask is uint8
+            planes_mask_binary = planes_mask
+            r1, g1, b1 = 255, 0, 40 # Original value
+            r2, g2, b2 = 1, 1, 1 # Value that we want to replace it with
+            red, green, blue = planes_mask[:,:,0], planes_mask[:,:,1], planes_mask[:,:,2]
+            mask = (red > 2*r1) & (green == g1) & (blue > 2*b1)
+            planes_mask_binary[:,:,:3][mask] = [r2, g2, b2]
+            planes_mask_binary = planes_mask_binary[:,:,0]
+            # plane is blue (255,0,40)
         except TypeError as e:
-            planes_mask = np.ones_like(depth_array).astype(np.uint8)
-            planes_mask = np.dstack((planes_mask, planes_mask, planes_mask))
-            # print("planes_mask error", planes_mask.dtype)
+            try:
+                print("plane mask 1st error")
+                planes_mask, planes_normal, list_plane_params = test_PlaneDetector_send(img_color=color_image*seg_mask_3d, img_depth=depth_array*seg_mask)
+            except TypeError as e:
+                print("plane mask not detected-skipping frame")
+                continue
+                ## removed this part
+                planes_mask = np.ones_like(depth_array).astype(np.uint8)
+                planes_mask = np.dstack((planes_mask, planes_mask, planes_mask))
         ##############################################
+        ## Hole filling for plane_mask (plane mask isn't binary - fixed that!)
+        # planes_mask_binary = planes_mask
+        # r1, g1, b1 = 255, 0, 40 # Original value
+        # r2, g2, b2 = 1, 1, 1 # Value that we want to replace it with
+        # red, green, blue = planes_mask[:,:,0], planes_mask[:,:,1], planes_mask[:,:,2]
+        # mask = (red == r1) & (green == g1) & (blue == b1)
+        # planes_mask_binary[:,:,:3][mask] = [r2, g2, b2]
+        # planes_mask_binary = planes_mask_binary[:,:,0]
+
+        planes_mask_binary = nd.binary_fill_holes(planes_mask_binary)
+        planes_mask_binary = planes_mask_binary.astype(np.uint8)
+        # Clean plane mask object detection by seg_mask
+        planes_mask_binary *= seg_mask
+        planes_mask_binary_3d = np.dstack((planes_mask_binary, planes_mask_binary, planes_mask_binary))
+        #############################################
 
         # for cv2 output
         pred_color = cv2.cvtColor(pred_color, cv2.COLOR_RGB2BGR)
@@ -207,30 +251,28 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
         # res = cv2.morphologyEx(planes_mask,cv2.MORPH_OPEN,kernel)
         dst2 = cv2.addWeighted(depth_color_image, alpha, color_image, beta, 0.0)
 
-        ### delete later
-        pm = (planes_mask!=0).astype(np.uint8)
-        # pm = planes_mask
-        # pm[np.where((pm != [0] ).all(axis = 1))] = [1]
-        final_output = color_image*pm
-        # final_output[final_output==0]=255
-        # final_output[np.where((final_output == [0] ).all(axis = 1))] = [255]
-        final_output = cv2.cvtColor(final_output,cv2.COLOR_BGR2RGB)
-        ######
-
         ## for displaying seg_mask
         seg_mask = (np.array(seg_mask)*255).astype(np.uint8)
         seg_mask = cv2.cvtColor(seg_mask,cv2.COLOR_GRAY2BGR)
         ##################################
 
+        ### delete later
+        final_output = color_image*planes_mask_binary_3d
+        mask = (final_output[:,:,0] ==0) & (final_output[:,:,1] ==0) & (final_output[:,:,2] ==0)
+        final_output[:,:,:3][mask] = [255, 255, 255]
+        ######
+
         # if np.sum(planes_mask) == depth_array.shape[0]*depth_array.shape[1]:
         #     image_set1 = np.vstack((dst, color_image))
         # else:
-        image_set1 = np.vstack((dst2, final_output))   
-        # combined_images = np.concatenate((dst, planes_mask), axis=1)
+        image_set1 = np.vstack((color_image, depth_color_image))   
+        # image_set2 = np.vstack((planes_mask_binary_3d*255, seg_mask))
+        image_set2 = np.vstack((dst, final_output))
+        combined_images = np.concatenate((image_set1, image_set2), axis=1)
         if save_images == True:
-            cv2.imwrite( "./meeting_example/3/frame%d.png" % idx, image_set1)
+            cv2.imwrite( "./meeting_example/3/frame%d.png" % idx, combined_images)
         try:
-            cv2.imshow('Full Stream', image_set1)
+            cv2.imshow('Full Stream', combined_images)
         except TypeError as e:
             print(idx, e)
         key = cv2.waitKey(1)

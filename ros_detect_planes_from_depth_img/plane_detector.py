@@ -156,7 +156,7 @@ class PlaneDetector(object):
             cam_intrin)
 
         if self._cfg.cloud_downsample_voxel_size > 0:
-            pcd = open3d.geometry.voxel_down_sample(
+            pcd = open3d.geometry.PointCloud.voxel_down_sample(
                 pcd, voxel_size=self._cfg.cloud_downsample_voxel_size)
 
         return pcd
