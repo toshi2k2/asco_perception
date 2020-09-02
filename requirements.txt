@@ -25,7 +25,7 @@ kiwisolver==1.2.0
 MarkupSafe==1.1.1
 matplotlib==3.3.1
 mistune==0.8.4
-mit-semseg==1.0.0
+git+https://github.com/CSAILVision/semantic-segmentation-pytorch.git@master
 nbconvert==5.6.1
 nbformat==5.0.7
 notebook==6.1.3
