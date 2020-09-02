@@ -15,6 +15,8 @@ import argparse
 import numpy as np
 import cv2
 import scipy.ndimage as nd
+import cupoch as x3d
+x3d.initialize_allocator(x3d.PoolAllocation, 1000000000)
 
 import pyrealsense2 as rs
 from read_bag import depth_filter, camera_intrinsics
@@ -110,7 +112,7 @@ def plane_detection(color_image, depth_array, loop=1):
     return planes_mask_binary
 
 
-def run_loop(bag_path, seg_model, seg_opts, save_images=False):
+def run_loop(bag_path, seg_model, seg_opts):
     # Create pipeline
     pipeline = rs.pipeline()
     # Create a config object
@@ -125,16 +127,19 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
     depth_scale = depth_sensor.get_depth_scale()
     print("Depth Scale is: " , depth_scale)
 
-    # Create opencv window to render image in
-    cv2.namedWindow("Full Stream", cv2.WINDOW_NORMAL)
-    
     # Create colorizer object
     colorizer = rs.colorizer()
     idx = 0
     # initial frame delay
     idx_limit = 30
 
-    pre_seg_mask_sum = None  # previous frame path segmentation area
+    vis = x3d.visualization.Visualizer()
+    vis.create_window()
+
+    ocgd = x3d.geometry.OccupancyGrid(0.03, 512)
+    flip_transform = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
+
+    # pre_seg_mask_sum = None  # previous frame path segmentation area
 
     # Streaming loop
     try:
@@ -156,8 +161,12 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
             # Get depth frame
             depth_frame = frames.get_depth_frame()
             # Get intrinsics and extrinsics
+
             if idx == idx_limit:
                 camera_intrinsics(color_frame, depth_frame, Pipe)
+            # intrinsic = x3d.camera.PinholeCameraIntrinsic(get_intrinsic_matrix(color_frame))
+            color_intrin = color_frame.profile.as_video_stream_profile().intrinsics
+            intrinsic = x3d.camera.PinholeCameraIntrinsic(color_intrin)
 
             color_image = np.asanyarray(color_frame.get_data())
 
@@ -167,16 +176,17 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
             # pavement, floor, road, earth/ground, field, path, dirt/track
             seg_mask = (pred==11) | (pred==3) | (pred==6) | (pred==13) | (pred==29) | (pred==52) | (pred==91)#.astype(np.uint8)  
             
-            if idx == idx_limit: # 1st frame detection needs to be robust
-                pre_seg_mask_sum = np.sum(seg_mask)
+            # if idx == idx_limit: # 1st frame detection needs to be robust
+            #     pre_seg_mask_sum = np.sum(seg_mask)
             # checking for bad detection
-            new_seg_sum = np.sum(seg_mask)
-            diff = abs(new_seg_sum-pre_seg_mask_sum)
+            # new_seg_sum = np.sum(seg_mask)
+            # diff = abs(new_seg_sum-pre_seg_mask_sum)
             # if diff > pre_seg_mask_sum/15:  # smoothening between segmentation outputs - seems like a bad idea since the model inputs are not connected between timesteps
             #     seg_mask = np.ones_like(pred).astype(np.uint8) # need to add depth (5mt) criterea for calculation for robustness
             #     del new_seg_sum
             # else:
-            pre_seg_mask_sum = new_seg_sum
+            # pre_seg_mask_sum = new_seg_sum
+
             ### mask Hole filling
             seg_mask = nd.binary_fill_holes(seg_mask).astype(int)
             seg_mask = seg_mask.astype(np.uint8)
@@ -204,11 +214,7 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
                     print("plane mask 1st error")
                     planes_mask, planes_normal, list_plane_params = test_PlaneDetector_send(img_color=color_image*seg_mask_3d, img_depth=depth_array*seg_mask)
                 except TypeError as e:
-                    print("plane mask not detected-skipping frame")
-                    continue
-                    ## removed this part
-                    planes_mask = np.ones_like(depth_array).astype(np.uint8)
-                    planes_mask = np.dstack((planes_mask, planes_mask, planes_mask))
+                    print("plane mask not detected-need to skip frames")
             ##############################################
             ## Hole filling for plane_mask (plane mask isn't binary - fixed that!)
             planes_mask_binary = nd.binary_fill_holes(planes_mask_binary)
@@ -218,60 +224,36 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
             planes_mask_binary_3d = np.dstack((planes_mask_binary, planes_mask_binary, planes_mask_binary))
             #############################################
 
-            # for cv2 output
-            pred_color = cv2.cvtColor(pred_color, cv2.COLOR_RGB2BGR)
-            color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
+            depth_image = x3d.geometry.Image(depth_array*planes_mask_binary)
+            color_image = x3d.geometry.Image(color_image*planes_mask_binary_3d)
 
-            # if save_images == True:
-            #     cv2.imwrite("data_/color/frame%d.png" % idx, color_image)     # save frame as JPEG file
-            #     cv2.imwrite("data_/depth/frame%d.png" % idx, depth_array)     # save frame as JPEG file
-            #     cv2.imwrite("data_/color_depth/frame%d.png" % idx, depth_color_image)     # save frame as JPEG file
-            #     cv2.imwrite("data_/thresholded_color/frame%d.png" % idx, thresholded_color_image)     # save frame as JPEG file
-            #     # cv2.imwrite("data_/thresholded_depth/frame%d.png" % idx, thresholded_depth_image)     # save frame as JPEG file
+            rgbd_image = x3d.geometry.RGBDImage.create_from_color_and_depth(
+                color_image,
+                depth_image,
+                depth_scale=1.0 / depth_scale,
+                depth_trunc=10,
+                convert_rgb_to_intensity=False)
+            temp = x3d.geometry.PointCloud.create_from_rgbd_image(
+                rgbd_image, intrinsic)
+            temp.transform(flip_transform)
+            temp = temp.voxel_down_sample(0.03)
+            ocgd.insert(temp, np.zeros(3))
 
-            # # Blending images
-            alpha = 0.2
-            beta = (1.0 - alpha)
-            dst = cv2.addWeighted(color_image, alpha, pred_color, beta, 0.0)
-            # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(11,11))
-            # res = cv2.morphologyEx(planes_mask,cv2.MORPH_OPEN,kernel)
-            dst2 = cv2.addWeighted(depth_color_image, alpha, color_image, beta, 0.0)
+            if frame_count == idx:
+                vis.add_geometry(ocgd)
 
-            ## for displaying seg_mask
-            seg_mask = (np.array(seg_mask)*255).astype(np.uint8)
-            seg_mask = cv2.cvtColor(seg_mask,cv2.COLOR_GRAY2BGR)
-            ##################################
+            vis.update_geometry(ocgd)
+            vis.poll_events()
+            vis.update_renderer()
 
-            ### delete later
-            final_output = color_image*planes_mask_binary_3d
-            mask = (final_output[:,:,0] ==0) & (final_output[:,:,1] ==0) & (final_output[:,:,2] ==0)
-            final_output[:,:,:3][mask] = [255, 255, 255]
-            ######
+            # dt1 = datetime.now()
+            # process_time = dt1 - dt0
+            # print("FPS: " + str(1 / process_time.total_seconds()))
+            # frame_count += 1
 
-            # if np.sum(planes_mask) == depth_array.shape[0]*depth_array.shape[1]:
-            #     image_set1 = np.vstack((dst, color_image))
-            # else:
-            image_set1 = np.vstack((color_image, depth_color_image))   
-            # image_set2 = np.vstack((planes_mask_binary_3d*255, seg_mask))
-            image_set2 = np.vstack((dst, final_output))
-            combined_images = np.concatenate((image_set1, image_set2), axis=1)
-            if save_images == True:
-                cv2.imwrite( "./meeting_example/3/frame%d.png" % idx, combined_images)
-            try:
-                cv2.imshow('Full Stream', combined_images)
-            except TypeError as e:
-                print(idx, e)
-            key = cv2.waitKey(1)
-            # if pressed escape exit program
-            if key == 27:
-                cv2.destroyAllWindows()
-                break
     finally:
         pipeline.stop()
-        cv2.destroyAllWindows()
-    # if save_images == True:
-    #     pkl.dump( threshold_mask, open( "data_/depth_threshold.pkl", "wb" ) )
-    #     print("Mask pickle saved")
+        vis.destroy_window()
     return
 
 if __name__ == "__main__":
@@ -280,7 +262,6 @@ if __name__ == "__main__":
                                     Remember to change the stream resolution, fps and format to match the recorded.")
     # Add argument which takes path to a bag file as an input
     parser.add_argument("-i", "--input", type=str, help="Path to the bag file", required=True)
-    parser.add_argument("-s", "--save", type=bool, help="Save video", default=False)
     # Parse the command line arguments to an object
     args = parser.parse_args()
     # Safety if no parameter have been given
@@ -297,7 +278,7 @@ if __name__ == "__main__":
     seg_mdel, options = segmentation_model_init()
 
     try:
-        run_loop(args.input, seg_model=seg_mdel, seg_opts=options, save_images=args.save)
+        run_loop(args.input, seg_model=seg_mdel, seg_opts=options)
     finally:
         pass
     

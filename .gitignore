@@ -13,6 +13,7 @@ seg_models/
 *.pth
 *.log
 *.bag
+parallel_exp.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

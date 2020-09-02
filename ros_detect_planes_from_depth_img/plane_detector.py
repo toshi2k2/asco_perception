@@ -85,7 +85,7 @@ class PlaneDetector(object):
         '''
 
         # -- Check input.
-        print(color_img.shape, print(depth_img.shape))
+        # print(color_img.shape, print(depth_img.shape))
         if len(depth_img.shape) != 2:
             raise RuntimeError("Depth image should have 2 channels.")
         if color_img is None:  # Use black image instead.
@@ -352,8 +352,8 @@ def test_PlaneDetector_send(img_color, img_depth):
         img_depth, img_color)
 
     # -- Print result.
-    for i, plane_param in enumerate(list_plane_params):
-        plane_param.print_params(index=i+1)
+    # for i, plane_param in enumerate(list_plane_params):
+    #     plane_param.print_params(index=i+1)
 
     return planes_mask, planes_img_viz, list_plane_params
 

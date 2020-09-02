@@ -66,7 +66,7 @@ RANSAC_config:
   dist_thresh: 0.02
 
   # After RANSAC is completed, whether print result or not.
-  is_print_res: True
+  is_print_res: False
 
 # -- Visualization
 visualization:
