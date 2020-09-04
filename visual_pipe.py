@@ -142,6 +142,7 @@ def run_loop(bag_path, seg_model, seg_opts):
     # pre_seg_mask_sum = None  # previous frame path segmentation area
 
     # Streaming loop
+    frame_count = 0
     try:
         while True:
             idx+=1
@@ -165,8 +166,10 @@ def run_loop(bag_path, seg_model, seg_opts):
             if idx == idx_limit:
                 camera_intrinsics(color_frame, depth_frame, Pipe)
             # intrinsic = x3d.camera.PinholeCameraIntrinsic(get_intrinsic_matrix(color_frame))
-            color_intrin = color_frame.profile.as_video_stream_profile().intrinsics
-            intrinsic = x3d.camera.PinholeCameraIntrinsic(color_intrin)
+            intrinsics = color_frame.profile.as_video_stream_profile().intrinsics
+            # color_intrin = color_frame.profile.as_video_stream_profile().intrinsics
+            # intrinsic = x3d.camera.PinholeCameraIntrinsic((color_intrin))
+            intrinsic = x3d.camera.PinholeCameraIntrinsic(640, 480, intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy)
 
             color_image = np.asanyarray(color_frame.get_data())
 
@@ -174,7 +177,8 @@ def run_loop(bag_path, seg_model, seg_opts):
             pred = test(color_image, seg_model, seg_opts)
 
             # pavement, floor, road, earth/ground, field, path, dirt/track
-            seg_mask = (pred==11) | (pred==3) | (pred==6) | (pred==13) | (pred==29) | (pred==52) | (pred==91)#.astype(np.uint8)  
+            seg_mask = (pred==11) | (pred==3) | (pred==6) | (pred==13) | (pred==29) | (pred==52) | (pred==91)#.astype(np.uint8) 
+            # seg_mask = np.ones((color_image.shape[0], color_image.shape[1])) 
             
             # if idx == idx_limit: # 1st frame detection needs to be robust
             #     pre_seg_mask_sum = np.sum(seg_mask)
@@ -193,7 +197,7 @@ def run_loop(bag_path, seg_model, seg_opts):
                 #####
             seg_mask_3d = np.dstack((seg_mask, seg_mask, seg_mask))
 
-            pred_color = colorEncode(pred, loadmat(os.path.join(model_folder, 'color150.mat'))['colors'])
+            # pred_color = colorEncode(pred, loadmat(os.path.join(model_folder, 'color150.mat'))['colors'])
             ##################################
 
             depth_frame = depth_filter(depth_frame)
@@ -239,7 +243,7 @@ def run_loop(bag_path, seg_model, seg_opts):
             temp = temp.voxel_down_sample(0.03)
             ocgd.insert(temp, np.zeros(3))
 
-            if frame_count == idx:
+            if frame_count == 0:
                 vis.add_geometry(ocgd)
 
             vis.update_geometry(ocgd)
@@ -249,7 +253,7 @@ def run_loop(bag_path, seg_model, seg_opts):
             # dt1 = datetime.now()
             # process_time = dt1 - dt0
             # print("FPS: " + str(1 / process_time.total_seconds()))
-            # frame_count += 1
+            frame_count += 1
 
     finally:
         pipeline.stop()
