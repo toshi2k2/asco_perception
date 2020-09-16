@@ -23,8 +23,11 @@ The main user entry file is `return_pipeline.py`:
 
 `python3 return_pipeline.py -i <path to rosbag> -s save images (default:False) -m <mode of output> (default:0)`
 There are 3 modes of output:
+
 0: Output is in a form of video visualization
+
 1: Output is in a form of video visualization and a list of pointclouds (output_list)
+
 2: Only a list of pointclouds is the output
 
 _Caution_: The list is not yet returned from the main method and the user is expected to modify the return to their own requirements. It is to be noted that having a large rosbag would result in a large pointcloud list as well. Running further processes in the while loop (especially when running real time) would be a good practice instead of using the method as a generator.
