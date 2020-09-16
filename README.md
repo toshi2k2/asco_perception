@@ -1,21 +1,26 @@
 # Traversable surface perception
 
 To install the dependencies, please run:
+
 `pip3 install -r requirements.txt`
+
 (It has been tested on Arch based Linux systems)
 In case there's an error installing `pyrealsense2` library - you'd need to install it from source (or use non pip package managers)
 
 We are using a pretrained (ADE20K dataset) model in the code, for which, run:
+
 `pip3 install git+https://github.com/CSAILVision/semantic-segmentation-pytorch.git@master`
 
 This does not run out of the box and a modified dataset method has been written in `seg_dataset.py`. The default encoder and decoder being used are _resnet101_ and _upernet_ but can be modified in `segmentation_model_init` method in `return_pipeline`.
 
 In case you want to render the traversable path, you'd need to install cupoch:
+
 `pip3 install cupoch`
 
 (Using `ctags` for understanding the workflow is highly recommended)
 
 The main user entry file is `return_pipeline.py`:
+
 `python3 return_pipeline.py -i <path to rosbag> -s save images (default:False) -m <mode of output> (default:0)`
 There are 3 modes of output:
 0: Output is in a form of video visualization
@@ -48,9 +53,12 @@ The folder _bags_extraction_ contains code files for converting rosbags to rgb a
 
 Both, _ros_detect_planes_from_depth_img_ and _RGBDPlaneDetection_ are folders containing code for plane detection while the former is RANSAC based, the latter is using agglomerative hierarchical clustering. Our code primarily uses the former method, which has been modified trivially to sync better with our method. You can modify and tune the respective values in the yaml files under `ros_detect.../config/`.
 
+Please refer to the writeup under _doumentation_ for further explanation of methadology.
+
 
 _To-Do_: 
 * Sparsify and convert the segmentation model to half-tensors. Knowedge ditilaation can also be used to significantly reduce the memory usage during inference.
 * Need to parallelize and optimize most of the code in entry file.
 * Add temporal filter to `depth_filter` method in `read_bag`.
+* Add methodolgy report.
 
