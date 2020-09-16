@@ -53,7 +53,7 @@ The folder _bags_extraction_ contains code files for converting rosbags to rgb a
 
 Both, _ros_detect_planes_from_depth_img_ and _RGBDPlaneDetection_ are folders containing code for plane detection while the former is RANSAC based, the latter is using agglomerative hierarchical clustering. Our code primarily uses the former method, which has been modified trivially to sync better with our method. You can modify and tune the respective values in the yaml files under `ros_detect.../config/`.
 
-Please refer to the writeup under _doumentation_ for further explanation of methadology.
+Please refer to the writeup under _documentation_ for further explanation of methadology.
 
 
 _To-Do_: 
