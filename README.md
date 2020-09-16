@@ -39,7 +39,7 @@ _Note 2_: The file is heavily commented - please refer to it for more understand
 In order to render the traversable path output in 3D, please install `cupoch` and use either `visual_pipe.py` or `cupoch_test.py`. The former is again similar to `pipeline2` with modifications added for 3d rendering. `cupoch_test.py` file is similat to `visual_pipe` but doesn't have implementation of the _semantic segmentaion_ model inference.
 `python3 visual_pipe.py -i <path to rosbag>`
 
-_TO-DO_: Due to lack of enough VRAM, I've unable to fully test this file.
+_TO-DO_: Due to lack of enough VRAM, I've been unable to fully test this file.
 `
 python3 cupoch_test.py -i <path to rosbag>`
 
