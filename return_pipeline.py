@@ -15,14 +15,44 @@ import argparse
 import numpy as np
 import cv2
 import scipy.ndimage as nd
+try:
+    import open3d as o3d
+except ImportError as e:
+    print("Need to import open3d for running mode 1 or 2")
+# from skimage.io import imsave
 
 import pyrealsense2 as rs
 from read_bag import depth_filter, camera_intrinsics
 from ros_detect_planes_from_depth_img.plane_detector import test_PlaneDetector_send
 
+
 git_repo_url = 'https://github.com/CSAILVision/semantic-segmentation-pytorch.git'
-project_name = splitext(basename(git_repo_url))[0]
-model_folder = 'seg_models'
+output_list = []  # Used for recording pointcloud output - might become really memory-extensive for really big rosbags - a better solution is to build further
+# processing in the while loop, especially if its real time
+
+
+def get_intrinsic_matrix(frame):
+    intrinsics = frame.profile.as_video_stream_profile().intrinsics
+    out = o3d.camera.PinholeCameraIntrinsic(1280, 720, intrinsics.fx,
+                                            intrinsics.fy, intrinsics.ppx,
+                                            intrinsics.ppy)
+    return out
+
+
+def create_folders():
+    try:
+        os.mkdir('output')
+        os.mkdir('data')
+        os.mkdir('data/color')
+        os.mkdir('data/depth')
+        os.mkdir('output/visualization')
+        os.mkdir('output/segmentation_mask')
+        os.mkdir('output/edges')
+        os.mkdir('output/output_mask')
+    except OSError:
+        pass
+    return
+
 
 def segmentation_model_init():
     if not os.path.exists(model_folder):
@@ -65,25 +95,26 @@ def segmentation_model_init():
       segmentation_module = segmentation_module.cuda()
     return segmentation_module, options
 
+
 # test on a given image
 def test(test_image_name, segmentation_module, options):
-  dataset_test = TestDataset([test_image_name], options, max_sample=-1)  # passing image directly to Dataset object
-  
-  batch_data = dataset_test[0]
-  segSize = (batch_data['img_ori'].shape[0], batch_data['img_ori'].shape[1])
-  img_resized_list = batch_data['img_data']
-  
-  scores = torch.zeros(1, options.num_class, segSize[0], segSize[1])
-  if torch.cuda.is_available():
-    scores = scores.cuda()
-
-  for img in img_resized_list:
-    feed_dict = batch_data.copy()
-    feed_dict['img_data'] = img
-    del feed_dict['img_ori']
-    del feed_dict['info']
+    dataset_test = TestDataset([test_image_name], options, max_sample=-1)  # passing image directly to Dataset object
+    
+    batch_data = dataset_test[0]
+    segSize = (batch_data['img_ori'].shape[0], batch_data['img_ori'].shape[1])
+    img_resized_list = batch_data['img_data']
+    
+    scores = torch.zeros(1, options.num_class, segSize[0], segSize[1])
     if torch.cuda.is_available():
-      feed_dict = {k: o.cuda() for k, o in feed_dict.items()}
+        scores = scores.cuda()
+
+    for img in img_resized_list:
+        feed_dict = batch_data.copy()
+        feed_dict['img_data'] = img
+        del feed_dict['img_ori']
+        del feed_dict['info']
+        if torch.cuda.is_available():
+            feed_dict = {k: o.cuda() for k, o in feed_dict.items()}
 
     # forward pass
     pred_tmp = segmentation_module(feed_dict, segSize=segSize)
@@ -91,6 +122,7 @@ def test(test_image_name, segmentation_module, options):
 
     _, pred = torch.max(scores, dim=1)
     return pred.squeeze(0).cpu().numpy()
+
 
 def plane_detection(color_image, depth_array, loop=1):
     planes_mask, planes_normal, list_plane_params = test_PlaneDetector_send(\
@@ -110,7 +142,9 @@ def plane_detection(color_image, depth_array, loop=1):
     return planes_mask_binary
 
 
-def run_loop(bag_path, seg_model, seg_opts, save_images=False):
+def run_loop(bag_path, seg_model, seg_opts, save_images=False, output_mode=0):
+    if save_images:
+        create_folders()
     # Create pipeline
     pipeline = rs.pipeline()
     # Create a config object
@@ -123,10 +157,13 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
     # Getting the depth sensor's depth scale (see rs-align example for explanation)
     depth_sensor = Pipe.get_device().first_depth_sensor()
     depth_scale = depth_sensor.get_depth_scale()
-    print("Depth Scale is: " , depth_scale)
+    print("Depth Scale is: " , depth_scale)  # can be commented out
 
-    # Create opencv window to render image in
-    cv2.namedWindow("Full Stream", cv2.WINDOW_NORMAL)
+    if output_mode == 0 or output_mode == 1:
+        # Create opencv window to render image in
+        cv2.namedWindow("Full Stream", cv2.WINDOW_NORMAL)
+
+    flip_transform = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
     
     # Create colorizer object
     colorizer = rs.colorizer()
@@ -134,7 +171,7 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
     # initial frame delay
     idx_limit = 30
 
-    pre_seg_mask_sum = None  # previous frame path segmentation area
+    # pre_seg_mask_sum = None  # previous frame path segmentation area - isn't being used right now
 
     # Streaming loop
     try:
@@ -153,18 +190,22 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
 
             # Get color frame
             color_frame = frames.get_color_frame()
+            # Get intrinsic in Open3d format for mode 2 and 3 for point cloud output
+            if output_mode == 1 or output_mode == 2:
+                intrinsic = o3d.camera.PinholeCameraIntrinsic(
+                    get_intrinsic_matrix(color_frame))
             # Get depth frame
             depth_frame = frames.get_depth_frame()
-            # Get intrinsics and extrinsics
+            # Print intrinsics and extrinsics - not necessary : can be commented out
             if idx == idx_limit:
                 camera_intrinsics(color_frame, depth_frame, Pipe)
 
             color_image = np.asanyarray(color_frame.get_data())
 
-            ### Add Segmentation part here ###
+            ### Add SEGMENTATION part here ###
             pred = test(color_image, seg_model, seg_opts)
 
-            # pavement, floor, road, earth/ground, field, path, dirt/track
+            # pavement, floor, road, earth/ground, field, path, dirt/track - chosen classes for the model selected (we'd like an oversegmentation of the path)
             seg_mask = (pred==11) | (pred==3) | (pred==6) | (pred==13) | (pred==29) | (pred==52) | (pred==91)#.astype(np.uint8)  
             
             if idx == idx_limit: # 1st frame detection needs to be robust
@@ -216,65 +257,84 @@ def run_loop(bag_path, seg_model, seg_opts, save_images=False):
             # Clean plane mask object detection by seg_mask
             planes_mask_binary *= seg_mask
             planes_mask_binary_3d = np.dstack((planes_mask_binary, planes_mask_binary, planes_mask_binary))
-            edges = planes_mask_binary - nd.morphology.binary_dilation(planes_mask_binary) # edges calculation
-            edges = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+            
+            edges = planes_mask_binary - nd.morphology.binary_dilation(planes_mask_binary) # edges calculation - between travesable and non-traversable path
             #############################################
 
-            # for cv2 output
-            pred_color = cv2.cvtColor(pred_color, cv2.COLOR_RGB2BGR)
-            color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
+            if output_mode == 1 or output_mode == 2:
+                odepth_image = o3d.geometry.Image(depth_array*edges)
+                ocolor_image = o3d.geometry.Image(color_image*np.dstack((edges, edges, edges)))
 
-            # if save_images == True:
-            #     cv2.imwrite("data_/color/frame%d.png" % idx, color_image)     # save frame as JPEG file
-            #     cv2.imwrite("data_/depth/frame%d.png" % idx, depth_array)     # save frame as JPEG file
-            #     cv2.imwrite("data_/color_depth/frame%d.png" % idx, depth_color_image)     # save frame as JPEG file
-            #     cv2.imwrite("data_/thresholded_color/frame%d.png" % idx, thresholded_color_image)     # save frame as JPEG file
-            #     # cv2.imwrite("data_/thresholded_depth/frame%d.png" % idx, thresholded_depth_image)     # save frame as JPEG file
+                rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                    ocolor_image,
+                    odepth_image,
+                    depth_scale=1.0 / depth_scale,
+                    depth_trunc=10, # set to 10 metres
+                    convert_rgb_to_intensity=False)
+                temp = o3d.geometry.PointCloud.create_from_rgbd_image(
+                    rgbd_image, intrinsic)
+                temp.transform(flip_transform)
+                # temp = temp.voxel_down_sample(0.03)
 
-            # # Blending images
-            alpha = 0.2
-            beta = (1.0 - alpha)
-            dst = cv2.addWeighted(color_image, alpha, pred_color, beta, 0.0)
-            # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(11,11))
-            # res = cv2.morphologyEx(planes_mask,cv2.MORPH_OPEN,kernel)
-            dst2 = cv2.addWeighted(depth_color_image, alpha, color_image, beta, 0.0)
+            # Point cloud output of frame is appended to the list
+            if output_mode == 1 or output_mode == 2:
+                output_list.append(temp)
 
-            ## for displaying seg_mask
-            seg_mask = (np.array(seg_mask)*255).astype(np.uint8)
-            seg_mask = cv2.cvtColor(seg_mask,cv2.COLOR_GRAY2BGR)
-            ##################################
+            # image format conversion for cv2 visualization/output
+            if output_mode == 0 or output_mode == 1 or save_images == True:
+                pred_color = cv2.cvtColor(pred_color, cv2.COLOR_RGB2BGR)
+                color_image = cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
+                edges = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+                ## for displaying seg_mask
+                seg_mask = (np.array(seg_mask)*255).astype(np.uint8)
+                seg_mask = cv2.cvtColor(seg_mask,cv2.COLOR_GRAY2BGR)  # segmentation binary mask
+                final_output_mask = cv2.cvtColor(planes_mask_binary, cv2.COLOR_GRAY2BGR)  # final traversable path mask
 
-            ### delete later
-            final_output = color_image*planes_mask_binary_3d
-            mask = (final_output[:,:,0] ==0) & (final_output[:,:,1] ==0) & (final_output[:,:,2] ==0)
-            final_output[:,:,:3][mask] = [255, 255, 255]
-            ######
+            if output_mode == 0 or output_mode == 1:
+                # # Blending rgb and depth images for display - can check alignment with this as well
+                alpha = 0.2
+                beta = (1.0 - alpha)
+                dst = cv2.addWeighted(color_image, alpha, pred_color, beta, 0.0)  # color and segmentation output from ADE20K model blended
+                dst2 = cv2.addWeighted(depth_color_image, alpha, color_image, beta, 0.0) # color and depth blended together
+                ##################################
 
-            # if np.sum(planes_mask) == depth_array.shape[0]*depth_array.shape[1]:
-            #     image_set1 = np.vstack((dst, color_image))
-            # else:
-            image_set1 = np.vstack((color_image, depth_color_image))   
-            # image_set2 = np.vstack((planes_mask_binary_3d*255, seg_mask))
-            image_set2 = np.vstack((dst, final_output))
-            # image_set2 = np.vstack((edges, final_output))
-            combined_images = np.concatenate((image_set1, image_set2), axis=1)
+                ### delete later if needed - color image masked by final traversable path
+                final_output = color_image*planes_mask_binary_3d
+                mask = (final_output[:,:,0] ==0) & (final_output[:,:,1] ==0) & (final_output[:,:,2] ==0)
+                final_output[:,:,:3][mask] = [255, 255, 255]
+                ######
+                
+                ### Select outputs for visualization - we've chosen some as default
+                image_set1 = np.vstack((dst, dst2))   
+                # image_set2 = np.vstack((planes_mask_binary_3d*255, seg_mask))
+                # image_set2 = np.vstack((dst, final_output))
+                image_set2 = np.vstack((edges, final_output))
+                ### Choose which images you want to display from above
+                combined_images = np.concatenate((image_set1, image_set2), axis=1)
+                
             if save_images == True:
-                cv2.imwrite( "./meeting_example/frame%d.png" % idx, combined_images)
-            try:
-                cv2.imshow('Full Stream', combined_images)
-            except TypeError as e:
-                print(idx, e)
-            key = cv2.waitKey(1)
-            # if pressed escape exit program
-            if key == 27:
-                cv2.destroyAllWindows()
-                break
+                # Outputs saved - you can modify this
+                cv2.imwrite( "output/visualization/frame%d.png" % idx, combined_images)
+                cv2.imwrite("data/color/frame%d.png" % idx, color_image)     # save frame as JPEG file
+                cv2.imwrite("data/depth/frame%d.png" % idx, depth_array)     # save frame as JPEG file
+                cv2.imwrite("output/edges/frame%d.png" % idx, edges)     # save frame as JPEG file
+                cv2.imwrite("output/segmentation_mask/frame%d.png" % idx, seg_mask)     # save frame as JPEG file
+                cv2.imwrite("output/output_mask/frame%d.png" % idx, final_output_mask)     # save frame as JPEG file
+                
+            if output_mode == 0 or output_mode == 1:
+                try:
+                    cv2.imshow('Full Stream', combined_images)
+                except TypeError as e:
+                    print(idx, e)
+                key = cv2.waitKey(1)
+                # if pressed escape exit program
+                if key == 27:
+                    cv2.destroyAllWindows()
+                    break
     finally:
         pipeline.stop()
-        cv2.destroyAllWindows()
-    # if save_images == True:
-    #     pkl.dump( threshold_mask, open( "data_/depth_threshold.pkl", "wb" ) )
-    #     print("Mask pickle saved")
+        if output_mode == 0 or output_mode == 1:
+            cv2.destroyAllWindows()
     return
 
 if __name__ == "__main__":
@@ -284,6 +344,7 @@ if __name__ == "__main__":
     # Add argument which takes path to a bag file as an input
     parser.add_argument("-i", "--input", type=str, help="Path to the bag file", required=True)
     parser.add_argument("-s", "--save", type=bool, help="Save video", default=False)
+    parser.add_argument("-m", "--mode", type=int, help="2 = only output,1 = output is added to global list (with visualization),0 = only visualization", default=0)
     # Parse the command line arguments to an object
     args = parser.parse_args()
     # Safety if no parameter have been given
@@ -297,10 +358,16 @@ if __name__ == "__main__":
         print("Only .bag files are accepted")
         exit()
 
+    project_name = splitext(basename(git_repo_url))[0]
+    model_folder = 'seg_models'
+
     seg_mdel, options = segmentation_model_init()
 
     try:
-        run_loop(args.input, seg_model=seg_mdel, seg_opts=options, save_images=args.save)
+        output = run_loop(args.input, seg_model=seg_mdel, seg_opts=options, save_images=args.save, output_mode=args.mode)
     finally:
         pass
+
+    if args.mode == 1 or args.mode == 2:
+        print("Number of pointclouds recorded: ", len(output_list))
     
